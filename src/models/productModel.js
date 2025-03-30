@@ -453,6 +453,36 @@ async create(productData) {
     }
   },
 
+  /**
+ * Finds a product by its barcode
+ */
+async findByBarcode(barcode) {
+  try {
+    if (!barcode) {
+      throw new ProductError('Barcode is required', 'MISSING_BARCODE');
+    }
+    
+    const { rows } = await query(
+      'SELECT * FROM products WHERE barcode = $1 LIMIT 1',
+      [barcode]
+    );
+    
+    if (rows.length === 0) {
+      return null;
+    }
+    
+    return rows[0];
+  } catch (error) {
+    if (error instanceof ProductError) throw error;
+    
+    throw new ProductError(
+      'Failed to find product by barcode',
+      'DATABASE_ERROR',
+      { originalError: error.message }
+    );
+  }
+},
+
   // [Other methods (getAll, getById, etc.) with similar complete error handling]
   
   /**
