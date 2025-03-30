@@ -23,6 +23,11 @@ app.use(cors());
 app.use(express.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+app.get("/", (req, res) => {
+  res.send("Inventory Billing API is running...");
+});
+
+
 // Public routes
 app.use('/api/auth', authRoutes);
 
