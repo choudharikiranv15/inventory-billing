@@ -49,5 +49,30 @@ router.post('/validate', async (req, res) => {
   const isValid = validateBarcode(barcode, type);
   res.json({ success: true, valid: isValid });
 });
+// In your productRoutes.js or similar
+router.post('/:id/barcode', async (req, res) => {
+  try {
+    const product = await ProductModel.getById(req.params.id);
+    if (!product) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Product not found' 
+      });
+    }
 
+    const barcode = await ProductModel.generateBarcode(req.params.id);
+    
+    res.json({
+      success: true,
+      barcode: barcode
+    });
+  } catch (error) {
+    console.error('Barcode generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Barcode generation failed',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 export default router;

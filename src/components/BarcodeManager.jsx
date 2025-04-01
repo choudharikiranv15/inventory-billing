@@ -45,24 +45,30 @@ const BarcodeManager = ({ productId, initialBarcode }) => {
     }
   };
 
-  const handleGenerate = async () => {
+  // In your BarcodeManager.jsx
+const handleGenerate = async () => {
     setLoading(true);
     try {
-      const response = await axios.post(`/api/products/${productId}/barcode`);
+      const response = await axios.post(
+        `/api/products/${productId}/barcode`,
+        {}, // Empty body if not needed
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      if (!response.data.success) {
+        throw new Error(response.data.error || 'Generation failed');
+      }
+      
       setBarcode(response.data.barcode);
-      setSnackbar({
-        open: true,
-        message: 'Barcode generated successfully',
-        severity: 'success'
-      });
       fetchBarcodeImage();
+      
     } catch (err) {
-      setError(err.response?.data?.error || 'Generation failed');
-      setSnackbar({
-        open: true,
-        message: 'Failed to generate barcode',
-        severity: 'error'
-      });
+      setError(err.message);
+      console.error('API Error:', err.response?.data);
     } finally {
       setLoading(false);
     }

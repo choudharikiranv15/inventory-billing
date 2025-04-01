@@ -474,6 +474,33 @@ async handleBarcode(productId, barcode = null) {
     client.release();
   }
 },
+// In ProductModel.js
+async generateBarcode(productId) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    
+    // Generate new barcode
+    const barcode = generateBarcode(); // From your utils
+    
+    // Update product
+    const { rows } = await client.query(
+      `UPDATE products 
+       SET barcode = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING barcode`,
+      [barcode, productId]
+    );
+    
+    await client.query('COMMIT');
+    return rows[0].barcode;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+},
   /**
    * Creates a new product with complete error handling
    */
