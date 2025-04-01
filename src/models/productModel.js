@@ -429,7 +429,51 @@ async generateBarcodeImage(productId) {
         return value;
     }
   },
+// In your ProductModel class
 
+// Add this method for barcode operations
+async handleBarcode(productId, barcode = null) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    
+    // Get current product
+    const { rows: [product] } = await client.query(
+      'SELECT * FROM products WHERE id = $1 FOR UPDATE',
+      [productId]
+    );
+
+    if (!product) {
+      throw new ProductError('Product not found', 'NOT_FOUND');
+    }
+
+    // Generate new barcode if not provided
+    const finalBarcode = barcode || generateBarcode();
+    
+    // Validate if provided
+    if (barcode && !validateBarcode(barcode)) {
+      throw new ProductError('Invalid barcode format', 'INVALID_BARCODE');
+    }
+
+    // Update product
+    const { rows: [updated] } = await client.query(
+      `UPDATE products 
+       SET barcode = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [finalBarcode, productId]
+    );
+
+    await client.query('COMMIT');
+    return updated;
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+},
   /**
    * Creates a new product with complete error handling
    */

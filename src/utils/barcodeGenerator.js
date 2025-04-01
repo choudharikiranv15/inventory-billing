@@ -2,32 +2,37 @@
 import { createCanvas } from 'canvas';
 import JsBarcode from 'jsbarcode';
 
-// Generate barcode image
-export const generateBarcodeImage = (barcode) => {
+const DEFAULT_CONFIG = {
+  format: 'CODE128',
+  width: 2,
+  height: 100,
+  displayValue: true,
+  fontSize: 16,
+  margin: 10,
+  background: '#ffffff',
+  lineColor: '#000000'
+};
+
+export const generateBarcodeImage = (barcode, config = {}) => {
   const canvas = createCanvas();
-  JsBarcode(canvas, barcode, {
-    format: 'CODE128',
-    width: 2,
-    height: 100,
-    displayValue: true,
-    fontSize: 16,
-    margin: 10
-  });
+  JsBarcode(canvas, barcode, { ...DEFAULT_CONFIG, ...config });
   return canvas.toBuffer('image/png');
 };
 
-// Generate random barcode
-export const generateBarcode = () => {
-  const randomNum = Math.floor(Math.random() * 9000000000000);
-  return randomNum.toString().padStart(13, '0');
+export const generateBarcode = (length = 13) => {
+  const randomNum = Math.floor(Math.random() * 10**length);
+  return randomNum.toString().padStart(length, '0');
 };
 
-// Validate barcode format
-export const validateBarcode = (barcode) => {
-  return /^[0-9]{8,14}$/.test(barcode);
+export const validateBarcode = (barcode, type = 'CODE128') => {
+  const validators = {
+    CODE128: /^[\x00-\x7F]{1,}$/,
+    EAN13: /^\d{13}$/,
+    UPC: /^\d{12}$/
+  };
+  return validators[type].test(barcode);
 };
 
-// Default export if needed
 export default {
   generateBarcodeImage,
   generateBarcode,

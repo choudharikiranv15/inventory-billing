@@ -1,49 +1,53 @@
 // src/routes/barcodeRoutes.js
 import express from 'express';
 import { ProductModel } from '../models/productModel.js';
-import { generateBarcodeImage } from '../utils/barcodeGenerator.js';
+import { 
+  generateBarcodeImage,
+  validateBarcode
+} from '../utils/barcodeGenerator.js';
 
 const router = express.Router();
 
-router.get('/:productId/image', async (req, res) => {
+// Generate barcode image for product
+router.get('/:id/image', async (req, res) => {
   try {
-    const { productId } = req.params;
-    
-    // Get product with barcode
-    const product = await ProductModel.getById(productId);
-    if (!product) {
+    const { id } = req.params;
+    const { format, width, height } = req.query;
+
+    const product = await ProductModel.getById(id);
+    if (!product?.barcode) {
       return res.status(404).json({ 
         success: false,
-        error: 'Product not found' 
+        error: 'Product or barcode not found' 
       });
     }
 
-    if (!product.barcode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Product has no barcode assigned'
-      });
-    }
+    const image = await generateBarcodeImage(product.barcode, {
+      format: format || 'CODE128',
+      width: width ? parseInt(width) : undefined,
+      height: height ? parseInt(height) : undefined
+    });
 
-    // Generate image
-    const imageBuffer = await generateBarcodeImage(product.barcode);
-    
-    // Set cache headers for better performance
     res.set({
       'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=86400' // 1 day cache
+      'Cache-Control': 'public, max-age=31536000' // 1 year cache
     });
-    
-    return res.send(imageBuffer);
+    res.send(image);
 
   } catch (error) {
-    console.error('Barcode image generation error:', error);
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
-      error: 'Failed to generate barcode image',
+      error: 'Barcode generation failed',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+});
+
+// Validate barcode format
+router.post('/validate', async (req, res) => {
+  const { barcode, type } = req.body;
+  const isValid = validateBarcode(barcode, type);
+  res.json({ success: true, valid: isValid });
 });
 
 export default router;
