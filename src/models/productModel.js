@@ -1,6 +1,7 @@
 import { query, getClient } from '../config/db.js';
 import { generateBarcode, validateBarcode } from '../utils/barcodeGenerator.js';
 
+
 // Utility function to group array items by a key
 const groupBy = (array, key) => array.reduce((acc, item) => {
   const groupKey = item[key];
@@ -8,6 +9,7 @@ const groupBy = (array, key) => array.reduce((acc, item) => {
   acc[groupKey].push(item);
   return acc;
 }, {});
+
 
 // Custom error class for product-related errors
 export class ProductError extends Error {
@@ -45,14 +47,6 @@ const PRODUCT_SCHEMA = {
 };
 
 export const ProductModel = {
-  /**
-   * Initializes the products table
-   */
-  // Add these helper methods to your ProductModel class
-
-/**
- * Validate foreign key references
- */
 async validateReferences(productData) {
   const validationErrors = [];
   
@@ -123,7 +117,7 @@ async checkSupplierExists(supplierId) {
   }
 },
 
-// Update the create method to include reference validation
+// In your create method, modify the barcode handling:
 async create(productData) {
   const client = await getClient();
   try {
@@ -132,15 +126,17 @@ async create(productData) {
     // Validate references first
     await this.validateReferences(productData);
     
-    // Rest of your create logic...
+    // Prepare product data
     const preparedData = this.prepareProductData(productData);
-    const finalBarcode = preparedData.barcode || generateBarcode();
     
+    // Handle barcode - generate if not provided, validate if provided
     if (preparedData.barcode) {
       preparedData.barcode = await this.validateBarcode(preparedData.barcode);
+    } else {
+      preparedData.barcode = await this.generateUniqueBarcode();
     }
-    preparedData.barcode = finalBarcode;
     
+    // Rest of your create method remains the same...
     const fields = Object.keys(preparedData);
     const values = fields.map(field => preparedData[field]);
     const placeholders = fields.map((_, i) => `$${i+1}`);
@@ -171,6 +167,112 @@ async create(productData) {
       throw error;
     }
   },
+  // Add these methods to your ProductModel class
+
+/**
+ * Generates a unique barcode that doesn't exist in the database
+ */
+async generateUniqueBarcode(maxAttempts = 5) {
+  const client = await getClient();
+  try {
+    let attempts = 0;
+    let barcode;
+    let isUnique = false;
+    
+    while (attempts < maxAttempts && !isUnique) {
+      barcode = generateBarcode();
+      const { rows } = await client.query(
+        'SELECT id FROM products WHERE barcode = $1',
+        [barcode]
+      );
+      isUnique = rows.length === 0;
+      attempts++;
+    }
+    
+    if (!isUnique) {
+      throw new ProductError(
+        'Failed to generate unique barcode after multiple attempts',
+        'BARCODE_GENERATION_FAILED'
+      );
+    }
+    
+    return barcode;
+  } finally {
+    client.release();
+  }
+},
+
+// In your ProductModel
+async getById(id) {
+  const { rows } = await query(
+      'SELECT * FROM products WHERE id = $1 LIMIT 1',
+      [id]
+  );
+  return rows[0] || null;
+},
+/**
+ * Validates a barcode and ensures it's unique
+ * @param {string} barcode - The barcode to validate
+ * @param {number} [excludeProductId] - Product ID to exclude from uniqueness check (for updates)
+ */
+async validateBarcode(barcode, excludeProductId = null) {
+  if (!validateBarcode(barcode)) {
+    throw new ProductError('Invalid barcode format', 'INVALID_BARCODE');
+  }
+  
+  const client = await getClient();
+  try {
+    let queryText = 'SELECT id FROM products WHERE barcode = $1';
+    const params = [barcode];
+    
+    if (excludeProductId) {
+      queryText += ' AND id != $2';
+      params.push(excludeProductId);
+    }
+    
+    const { rows } = await client.query(queryText, params);
+    if (rows.length > 0) {
+      throw new ProductError('Barcode already exists', 'DUPLICATE_BARCODE');
+    }
+    
+    return barcode;
+  } finally {
+    client.release();
+  }
+},
+
+/**
+ * Generates a barcode image for a product
+ * @param {number} productId - ID of the product
+ * @returns {Promise<Buffer>} PNG image buffer
+ */
+async generateBarcodeImage(productId) {
+  const client = await getClient();
+  try {
+    // Get the product's barcode or generate one if it doesn't exist
+    const { rows } = await client.query(
+      'SELECT barcode FROM products WHERE id = $1',
+      [productId]
+    );
+    
+    if (rows.length === 0) {
+      throw new ProductError('Product not found', 'PRODUCT_NOT_FOUND');
+    }
+    
+    let barcode = rows[0].barcode;
+    if (!barcode) {
+      barcode = await this.generateUniqueBarcode();
+      await client.query(
+        'UPDATE products SET barcode = $1 WHERE id = $2',
+        [barcode, productId]
+      );
+    }
+    
+    return generateBarcodeImage(barcode);
+  } finally {
+    client.release();
+  }
+},
 
   /**
    * Verifies and updates database schema

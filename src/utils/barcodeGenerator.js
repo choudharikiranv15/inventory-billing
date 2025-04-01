@@ -1,56 +1,35 @@
-/**
- * Utility for generating and validating barcodes
- */
-const BARCODE_TYPES = {
-  EAN13: { length: 13, prefix: '20' }, // European Article Number
-  UPC: { length: 12, prefix: '0' },    // Universal Product Code
-  INTERNAL: { length: 10, prefix: 'INT' } // For internal use
+// src/utils/barcodeGenerator.js
+import { createCanvas } from 'canvas';
+import JsBarcode from 'jsbarcode';
+
+// Generate barcode image
+export const generateBarcodeImage = (barcode) => {
+  const canvas = createCanvas();
+  JsBarcode(canvas, barcode, {
+    format: 'CODE128',
+    width: 2,
+    height: 100,
+    displayValue: true,
+    fontSize: 16,
+    margin: 10
+  });
+  return canvas.toBuffer('image/png');
 };
 
-export function generateBarcode(type = 'INTERNAL') {
-  const config = BARCODE_TYPES[type] || BARCODE_TYPES.INTERNAL;
-  
-  let barcode = config.prefix || '';
-  const remainingLength = config.length - barcode.length;
-  
-  // Generate random numbers for remaining length
-  for (let i = 0; i < remainingLength; i++) {
-    barcode += Math.floor(Math.random() * 10);
-  }
-  
-  // For EAN13 and UPC, calculate check digit
-  if (type === 'EAN13' || type === 'UPC') {
-    barcode = barcode.slice(0, -1) + calculateCheckDigit(barcode);
-  }
-  
-  return barcode;
-}
+// Generate random barcode
+export const generateBarcode = () => {
+  const randomNum = Math.floor(Math.random() * 9000000000000);
+  return randomNum.toString().padStart(13, '0');
+};
 
-function calculateCheckDigit(barcode) {
-  const digits = barcode.split('').map(Number);
-  let sum = 0;
-  
-  digits.forEach((digit, index) => {
-    sum += digit * (index % 2 === 0 ? 1 : 3);
-  });
-  
-  const checkDigit = (10 - (sum % 10)) % 10;
-  return checkDigit.toString();
-}
+// Validate barcode format
+export const validateBarcode = (barcode) => {
+  return /^[0-9]{8,14}$/.test(barcode);
+};
 
-export function validateBarcode(barcode) {
-  if (!barcode) return false;
-  
-  // Check for internal barcode format
-  if (barcode.startsWith('INT') && barcode.length === BARCODE_TYPES.INTERNAL.length) {
-    return true;
-  }
-  
-  // Check for numeric barcodes (EAN13/UPC)
-  if (/^\d+$/.test(barcode)) {
-    const length = barcode.length;
-    return length === BARCODE_TYPES.EAN13.length || length === BARCODE_TYPES.UPC.length;
-  }
-  
-  return false;
-}
+// Default export if needed
+export default {
+  generateBarcodeImage,
+  generateBarcode,
+  validateBarcode
+};
