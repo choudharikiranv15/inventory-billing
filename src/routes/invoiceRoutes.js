@@ -7,6 +7,18 @@ const router = express.Router();
 router.post('/generate', async (req, res) => {
   const { invoiceNumber, sale_id, customer, items } = req.body;
 
+  // 🔍 Debug Logs
+  console.log('Received invoice data:');
+  console.log('invoiceNumber:', invoiceNumber);
+  console.log('sale_id:', sale_id);
+  console.log('customer:', customer);
+  console.log('items:', items);
+
+  // Optional: validate input
+  if (!invoiceNumber || !sale_id || !customer || !customer.name || !items || !items.length) {
+    return res.status(400).json({ message: 'Missing required invoice fields' });
+  }
+
   try {
     const pdfBuffer = await generateInvoiceBuffer(invoiceNumber, sale_id, customer, items);
 
@@ -18,5 +30,6 @@ router.post('/generate', async (req, res) => {
     res.status(400).json({ message: err.message });
   }
 });
+
 
 export default router;
