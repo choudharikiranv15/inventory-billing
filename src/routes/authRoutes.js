@@ -39,5 +39,13 @@ router.get('/whoami', verifyToken, (req, res) => {
   });
 });
 
-
+router.get('/', verifyToken, async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM products');
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching products:', err.message);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 export default router;

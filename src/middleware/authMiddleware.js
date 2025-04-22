@@ -1,6 +1,5 @@
 import jwt from 'jsonwebtoken';
 import { query } from '../config/db.js';
-import { env } from 'node:process';
 
 // Core Authentication
 export const verifyToken = (req, res, next) => {
@@ -12,7 +11,7 @@ export const verifyToken = (req, res, next) => {
 
   const token = authHeader.split(' ')[1];
   
-  jwt.verify(token, env.JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
       const message = err.name === 'TokenExpiredError' 
         ? 'Token expired' 
@@ -58,16 +57,17 @@ export const checkPermission = (requiredPermission) => {
       }
 
       // 3. Check both permission sources
+      const rolePermissions = user.role_permissions 
+        ? JSON.parse(user.role_permissions) 
+        : {};
+      
       const hasPermission = 
-        // Check role_permissions table
         (await query(
           `SELECT 1 FROM role_permissions 
            WHERE role_id = $1 AND permission = $2`,
           [user.role_id, requiredPermission]
         )).rows.length > 0 ||
-        // Check roles.permissions JSON
-        (user.role_permissions && 
-         user.role_permissions[requiredPermission.split(':')[0]] === requiredPermission.split(':')[1]);
+        (rolePermissions[requiredPermission.split(':')[0]] === requiredPermission.split(':')[1]);
 
       if (!hasPermission) {
         return res.status(403).json({
@@ -88,30 +88,6 @@ export const checkPermission = (requiredPermission) => {
   };
 };
 
-
-export const errorHandler = (err, req, res, next) => {
-  console.error('Error:', err);
-  
-  // Handle ProductError specifically
-  if (err.name === 'ProductError') {
-    return res.status(400).json({
-      error: err.message,
-      type: err.type,
-      details: err.details,
-      timestamp: new Date().toISOString()
-    });
-  }
-  
-  // Handle other errors
-  res.status(500).json({
-    error: 'Internal server error',
-    message: err.message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-};
-
-
-
 // Combined middleware for common scenarios
 export const authAndPermission = (permission) => [
   verifyToken,
@@ -123,7 +99,7 @@ export const adminOnly = [
   authorize('admin')
 ];
 
-// Add this at the bottom of your existing authMiddleware.js
+// Export as an object for easier usage
 export const authMiddleware = {
   verifyToken,
   authorize,

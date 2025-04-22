@@ -18,9 +18,11 @@ export const generateInvoice = async (req, res) => {
     const total_amount = quantity_sold * price;
 
     const invoice = await poolQuery(
-      'INSERT INTO invoices (sale_id, total_amount) VALUES ($1, $2) RETURNING *',
-      [sale_id, total_amount]
+      "INSERT INTO invoices (sale_id, customer_id, total_amount, invoice_date) VALUES ($1, $2, $3, $4) RETURNING id",
+      [sale_id, customer.id, total_amount, invoice_date]
     );
+    
+    console.log("✅ Invoice inserted:", invoice.rows[0]);
 
     res.status(201).json(invoice.rows[0]);
   } catch (err) {

@@ -1,22 +1,22 @@
+// routes/invoiceRoutes.js
 import express from 'express';
-import { generateInvoice, getInvoices, generateInvoicePDFHandler } from '../controllers/invoiceController.js';
+import { generateInvoiceBuffer } from '../utils/invoiceGenerator.js';
 
 const router = express.Router();
 
-// Ensure all functions are defined before using them
-router.post('/', (req, res, next) => {
-  if (!generateInvoice) return res.status(500).json({ error: 'generateInvoice is undefined' });
-  generateInvoice(req, res, next);
-});
+router.post('/generate', async (req, res) => {
+  const { invoiceNumber, sale_id, customer, items } = req.body;
 
-router.get('/', (req, res, next) => {
-  if (!getInvoices) return res.status(500).json({ error: 'getInvoices is undefined' });
-  getInvoices(req, res, next);
-});
+  try {
+    const pdfBuffer = await generateInvoiceBuffer(invoiceNumber, sale_id, customer, items);
 
-router.get('/download/:invoice_id', (req, res, next) => {
-  if (!generateInvoicePDFHandler) return res.status(500).json({ error: 'generateInvoicePDFHandler is undefined' });
-  generateInvoicePDFHandler(req, res, next);
+    res.setHeader('Content-Disposition', `attachment; filename=invoice_${invoiceNumber}.pdf`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('Error generating invoice:', err.message);
+    res.status(400).json({ message: err.message });
+  }
 });
 
 export default router;

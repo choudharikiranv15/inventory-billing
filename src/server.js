@@ -12,7 +12,7 @@ import { verifyToken } from './middleware/authMiddleware.js';
 import { ProductModel } from './models/productModel.js';
 import cron from 'node-cron';
 import { errorHandler } from './middleware/errorHandler.js';
-
+import customerRoutes from './routes/customerRoutes.js';
 
 dotenv.config();
 
@@ -31,12 +31,16 @@ app.get("/", (req, res) => {
 // Public routes
 app.use('/api/auth', authRoutes);
 
+
+
 // Protected routes
 app.use('/api/reports', verifyToken, reportRoutes);
 app.use('/api/barcode', verifyToken, barcodeRoutes);
 app.use('/api/products', verifyToken, productRoutes);
 app.use('/api/sales', verifyToken, salesRoutes);
 app.use('/api/invoices', verifyToken, invoiceRoutes);
+app.use('/api/customers', verifyToken, customerRoutes); 
+
 
 // Health check
 app.get('/api/health', (req, res) => {
