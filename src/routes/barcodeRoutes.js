@@ -5,6 +5,8 @@ import {
   validateBarcode
 } from '../utils/barcodeGenerator.js';
 import { query } from '../config/db.js'; // Ensure correct path
+import { BarcodeController } from '../controllers/barcodeController.js';
+import { verifyToken } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -45,6 +47,12 @@ router.get('/:id/image', async (req, res) => {
   }
 });
 
+// Scan barcode and fetch product details
+router.get('/scan/:barcode', verifyToken, BarcodeController.scan);
+
+// Generate barcode or QR code
+router.post('/generate', verifyToken, BarcodeController.generateCode);
+
 // Validate barcode format
 router.post('/validate', async (req, res) => {
   const { barcode, type } = req.body;
@@ -84,28 +92,6 @@ router.post('/:id/barcode', async (req, res) => {
       error: 'Barcode generation failed',
       details: process.env.NODE_ENV === 'development' ? error.message : error.toString()
     });
-  }
-});
-
-// Scan barcode and fetch product details
-router.get('/scan/:barcode', async (req, res, next) => {
-  try {
-    const { barcode } = req.params;
-    if (!barcode) {
-      return res.status(400).json({ error: 'Barcode is required' });
-    }
-
-    // Query to fetch product details
-    const result = await query('SELECT * FROM products WHERE barcode = $1', [barcode]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Product not found' });
-    }
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Barcode scan error:', err);
-    next(err);
   }
 });
 

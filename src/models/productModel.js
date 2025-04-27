@@ -656,42 +656,60 @@ async findByBarcode(barcode) {
   }
 },
 
-  // [Other methods (getAll, getById, etc.) with similar complete error handling]
-  
   /**
    * Gets all products with safe filtering
    */
   async getAll(filters = {}) {
     try {
-      let queryText = 'SELECT * FROM products WHERE 1=1';
+      let queryText = 'SELECT * FROM products';
       const params = [];
-      let paramIndex = 1;
+      const conditions = [];
       
-      // Apply safe filters
-      if (filters.location_id) {
-        queryText += ` AND location_id = $${paramIndex++}`;
-        params.push(this.castValue(filters.location_id, 'integer'));
+      // Add filter conditions
+      if (filters.category) {
+        conditions.push(`category = $${params.length + 1}`);
+        params.push(filters.category);
       }
       
-      if (filters.category) {
-        queryText += ` AND category = $${paramIndex++}`;
-        params.push(this.castValue(filters.category, 'varchar'));
+      if (filters.location_id) {
+        conditions.push(`location_id = $${params.length + 1}`);
+        params.push(filters.location_id);
+      }
+      
+      if (filters.supplier_id) {
+        conditions.push(`supplier_id = $${params.length + 1}`);
+        params.push(filters.supplier_id);
       }
       
       if (filters.minStock) {
-        queryText += ' AND quantity <= min_stock_level';
+        conditions.push(`quantity <= min_stock_level`);
       }
       
-      queryText += ' ORDER BY name ASC';
+      // Add WHERE clause if there are conditions
+      if (conditions.length > 0) {
+        queryText += ' WHERE ' + conditions.join(' AND ');
+      }
+      
+      // Add ORDER BY
+      queryText += ' ORDER BY name';
       
       const { rows } = await query(queryText, params);
       return rows;
     } catch (error) {
-      throw new ProductError(
-        'Failed to retrieve products',
-        'DATABASE_ERROR',
-        { originalError: error.message }
+      console.error('Error in ProductModel.getAll:', error);
+      throw error;
+    }
+  },
+  
+  async getLowStockItems() {
+    try {
+      const { rows } = await query(
+        'SELECT * FROM products WHERE quantity <= min_stock_level ORDER BY quantity ASC'
       );
+      return rows;
+    } catch (error) {
+      console.error('Error in ProductModel.getLowStockItems:', error);
+      throw error;
     }
   }
 };
