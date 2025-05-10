@@ -1,4 +1,5 @@
 import { ProductModel } from '../models/productModel.js';
+import { pool } from '../db/db.js';
 
 export const ProductController = {
   /**
@@ -298,40 +299,37 @@ export const ProductController = {
    */
   async delete(req, res) {
     try {
-      // Validate product ID
-      if (!req.params.id || isNaN(parseInt(req.params.id))) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid product ID',
-          details: 'ID must be a number'
-        });
-      }
-
-      const deleted = await ProductModel.delete(parseInt(req.params.id));
+      const { id } = req.params;
       
-      if (!deleted) {
+      // First check if product exists
+      const product = await pool.query(
+        'SELECT * FROM products WHERE id = $1',
+        [id]
+      );
+
+      if (product.rows.length === 0) {
         return res.status(404).json({
           success: false,
-          error: 'Product not found',
-          message: 'No product found with the specified ID'
+          message: 'Product not found'
         });
       }
 
-      return res.json({
+      // Delete the product
+      await pool.query(
+        'DELETE FROM products WHERE id = $1',
+        [id]
+      );
+
+      res.json({
         success: true,
         message: 'Product deleted successfully'
       });
     } catch (error) {
       console.error('Delete product error:', error);
-      
-      return res.status(500).json({
+      res.status(500).json({
         success: false,
-        error: 'Internal server error',
-        message: 'Failed to delete product',
-        details: process.env.NODE_ENV === 'development' ? {
-          message: error.message,
-          stack: error.stack
-        } : undefined
+        message: 'Error deleting product',
+        error: error.message
       });
     }
   }

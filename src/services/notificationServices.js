@@ -2,16 +2,19 @@ import { query } from '../config/db.js';
 import nodemailer from 'nodemailer';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
+import { pool } from '../db/db.js';
 
 dotenv.config();
 
 // Email configuration
 const emailTransporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: process.env.SMTP_HOST,
+  port: process.env.SMTP_PORT,
+  secure: process.env.SMTP_PORT === '465',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
 });
 
 // SMS configuration (Twilio)
@@ -35,30 +38,65 @@ export const NotificationService = {
    * @returns {Promise<Array>} Low stock items detected
    */
   async checkStockLevels() {
-    const { rows: lowStockItems } = await query(
-      `SELECT 
-        p.id, p.name, p.quantity, p.min_stock_level,
-        l.name as location
-       FROM products p
-       JOIN locations l ON p.location_id = l.id
-       WHERE p.quantity <= p.min_stock_level
-       AND (p.last_alert_at IS NULL OR p.last_alert_at < NOW() - INTERVAL '24 hours')`
-    );
+    try {
+      // Get all products with low stock
+      const lowStockProducts = await pool.query(`
+        SELECT p.*, l.name as location_name 
+        FROM products p
+        LEFT JOIN locations l ON p.location_id = l.id
+        WHERE p.quantity <= p.min_stock_level
+      `);
 
-    if (lowStockItems.length > 0) {
-      await this.sendAlerts(lowStockItems);
-      
-      // Update last_alert_at for these products
-      const productIds = lowStockItems.map(item => item.id);
-      await query(
-        `UPDATE products 
-         SET last_alert_at = NOW() 
-         WHERE id = ANY($1::int[])`,
-        [productIds]
-      );
+      if (lowStockProducts.rows.length === 0) {
+        console.log('No products with low stock found');
+        return;
+      }
+
+      // Get admin users to notify
+      const adminUsers = await pool.query(`
+        SELECT username, email_address 
+        FROM users 
+        WHERE role = 'admin'
+      `);
+
+      if (adminUsers.rows.length === 0) {
+        console.log('No admin users found to notify');
+        return;
+      }
+
+      // Prepare notification message
+      const message = this.formatLowStockMessage(lowStockProducts.rows);
+
+      // Send notifications to all admin users
+      for (const user of adminUsers.rows) {
+        if (user.email_address) {
+          await this.sendEmail(
+            user.email_address,
+            'Low Stock Alert',
+            message
+          );
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error checking stock levels:', error);
+      throw error;
     }
+  },
+
+  formatLowStockMessage(products) {
+    let message = 'The following products are running low on stock:\n\n';
     
-    return lowStockItems;
+    products.forEach(product => {
+      message += `- ${product.name} (${product.location_name || 'No location'})\n`;
+      message += `  Current stock: ${product.quantity}\n`;
+      message += `  Minimum required: ${product.min_stock_level}\n\n`;
+    });
+
+    message += '\nPlease take necessary action to restock these items.';
+    
+    return message;
   },
 
   /**
@@ -124,20 +162,19 @@ export const NotificationService = {
    */
   async sendEmail(to, subject, text) {
     try {
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.log(`Email not configured, would have sent to ${to}`);
-        return;
-      }
-      
-      await emailTransporter.sendMail({
-        from: process.env.EMAIL_USER,
+      const mailOptions = {
+        from: process.env.SMTP_USER,
         to,
         subject,
         text
-      });
-      console.log(`Email sent to ${to}`);
+      };
+
+      await emailTransporter.sendMail(mailOptions);
+      console.log('Email sent successfully');
+      return true;
     } catch (error) {
-      console.error('Email sending error:', error);
+      console.error('Error sending email:', error);
+      return false;
     }
   },
   

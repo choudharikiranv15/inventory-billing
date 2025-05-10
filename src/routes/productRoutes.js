@@ -4,57 +4,123 @@ import { verifyToken, authAndPermission } from '../middleware/authMiddleware.js'
 
 const router = express.Router();
 
+// Apply authentication middleware to all routes
+router.use(verifyToken);
+
 // Create a new product
 router.post('/', 
-  /* verifyToken, */
-  /* authAndPermission('inventory:write'), */
-  ProductController.create
+  authAndPermission('inventory:write'),
+  async (req, res) => {
+    try {
+      const result = await ProductController.create(req, res);
+      return result;
+    } catch (error) {
+      console.error('Error creating product:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create product',
+        details: error.message
+      });
+    }
+  }
 );
 
 // Get all products (with optional query parameters)
 // Example: /api/products?location_id=1&category=electronics
 router.get('/',
-  /* verifyToken, */
-  ProductController.getAll
+  async (req, res) => {
+    try {
+      const result = await ProductController.getAll(req, res);
+      return result;
+    } catch (error) {
+      console.error('Error fetching products:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch products',
+        details: error.message
+      });
+    }
+  }
 );
 
 // Get a specific product by ID
 router.get('/:id',
-  /* verifyToken, */
-  ProductController.getById
+  async (req, res) => {
+    try {
+      const result = await ProductController.getById(req, res);
+      return result;
+    } catch (error) {
+      console.error('Error fetching product:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch product',
+        details: error.message
+      });
+    }
+  }
 );
 
 // Update a product
 router.put('/:id',
-  /* verifyToken, */
-  /* authAndPermission('inventory:write'), */
-  ProductController.update
+  authAndPermission('inventory:write'),
+  async (req, res) => {
+    try {
+      const result = await ProductController.update(req, res);
+      return result;
+    } catch (error) {
+      console.error('Error updating product:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update product',
+        details: error.message
+      });
+    }
+  }
 );
 
 // Delete a product
 router.delete('/:id',
-  /* verifyToken, */
-  /* authAndPermission('inventory:write'), */
-  ProductController.delete
+  authAndPermission('inventory:write'),
+  async (req, res) => {
+    try {
+      const result = await ProductController.delete(req, res);
+      return result;
+    } catch (error) {
+      console.error('Error deleting product:', error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to delete product',
+        details: error.message
+      });
+    }
+  }
 );
 
 // Update product stock
 router.patch('/:id/stock',
-  /* verifyToken, */
-  /* authAndPermission('inventory:write'), */
-  (req, res) => {
-    const { id } = req.params;
-    const { quantityChange } = req.body;
-    
-    if (quantityChange === undefined) {
-      return res.status(400).json({ 
+  authAndPermission('inventory:write'),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { quantityChange } = req.body;
+      
+      if (quantityChange === undefined) {
+        return res.status(400).json({ 
+          success: false,
+          error: 'Missing quantityChange parameter' 
+        });
+      }
+      
+      const result = await ProductController.updateStock(req, res);
+      return result;
+    } catch (error) {
+      console.error('Error updating product stock:', error);
+      return res.status(500).json({
         success: false,
-        error: 'Missing quantityChange parameter' 
+        error: 'Failed to update product stock',
+        details: error.message
       });
     }
-    
-    // Forward to controller
-    ProductController.updateStock(req, res);
   }
 );
 

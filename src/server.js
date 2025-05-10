@@ -10,6 +10,7 @@ import barcodeRoutes from './routes/barcodeRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import salesRoutes from './routes/salesRoutes.js';
 import invoiceRoutes from './routes/invoiceRoutes.js';
+import userRoutes from './routes/userRoutes.js';
 import { verifyToken } from './middleware/authMiddleware.js';
 import { ProductModel } from './models/productModel.js';
 import cron from 'node-cron';
@@ -20,13 +21,13 @@ import NotificationService from './services/notificationServices.js';
 import BackupService from './services/backupService.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { setupScheduledTasks } from './utils/scheduler.js';
 
 // Initialize required packages dynamically to avoid startup errors
-let helmet, rateLimit, apiLimiter;
+let apiLimiter;
 try {
-  helmet = (await import('helmet')).default;
-  rateLimit = (await import('express-rate-limit')).default;
-  
   apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100, // limit each IP to 100 requests per windowMs
@@ -44,11 +45,51 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Allow Chrome extensions
+    if (origin.startsWith('chrome-extension://')) {
+      return callback(null, true);
+    }
+    
+    // Allow localhost development
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'http://localhost:3002',
+      'http://localhost:5000',
+      'http://localhost:5001',
+      'http://localhost:5002',
+      process.env.FRONTEND_URL // Add your production frontend URL here
+    ].filter(Boolean); // Remove undefined/null values
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true, // Allow credentials (cookies, authorization headers, etc)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range']
+};
+
+// Apply CORS with options
+app.use(cors(corsOptions));
+
+// Pre-flight requests
+app.options('*', cors(corsOptions));
+
 // Security middleware
-if (helmet) {
-  app.use(helmet()); // Add security headers
-  console.log('Helmet security middleware enabled');
-}
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
+}));
 
 // Apply rate limiting to API routes if available
 if (apiLimiter) {
@@ -57,9 +98,8 @@ if (apiLimiter) {
 }
 
 // Middleware
-app.use(cors());
 app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true }));
 
 // API routes
 // Public routes
@@ -75,6 +115,7 @@ app.use('/api/customers', verifyToken, customerRoutes);
 app.use('/api/vendors', verifyToken, vendorRoutes);
 app.use('/api/payments', verifyToken, paymentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/users', userRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -124,35 +165,59 @@ app.use((err, req, res, next) => {
 });
 app.use(errorHandler);
 
-// Scheduled tasks
-const scheduleTask = (cronExpression, taskFunction, taskName) => {
-  try {
-    cron.schedule(cronExpression, () => {
-      try {
-        taskFunction();
-      } catch (error) {
-        console.error(`Error running scheduled task "${taskName}":`, error);
-      }
+// Setup scheduled tasks
+setupScheduledTasks();
+
+// Start server with port fallback and error handling
+const PORT = process.env.PORT || 5000;
+
+const startServer = async () => {
+  let currentPort = PORT;
+  const maxRetries = 3;
+  let retryCount = 0;
+
+  const tryStartServer = () => {
+    return new Promise((resolve, reject) => {
+      const server = app.listen(currentPort, () => {
+        console.log(`Server running on port ${currentPort}`);
+        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+        resolve(server);
+      });
+
+      server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+          console.log(`Port ${currentPort} is in use, trying next port...`);
+          server.close();
+          currentPort++;
+          retryCount++;
+          if (retryCount < maxRetries) {
+            tryStartServer().then(resolve).catch(reject);
+          } else {
+            reject(new Error(`Could not find an available port after ${maxRetries} attempts`));
+          }
+        } else {
+          reject(error);
+        }
+      });
     });
-    console.log(`Scheduled task: ${taskName}`);
+  };
+
+  try {
+    const server = await tryStartServer();
+
+    // Handle process termination
+    process.on('SIGTERM', () => {
+      console.info('SIGTERM signal received. Closing server...');
+      server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+      });
+    });
+
   } catch (error) {
-    console.error(`Failed to schedule task "${taskName}":`, error);
+    console.error('Failed to start server:', error);
+    process.exit(1);
   }
 };
 
-// Stock check daily at 9 AM
-scheduleTask('0 9 * * *', () => ProductModel.checkAndGeneratePOs(), 'Stock check and PO generation');
-
-// Low stock alerts every 2 hours
-scheduleTask('0 */2 * * *', () => NotificationService.checkStockLevels(), 'Low stock alerts');
-
-// Database backups daily at 2 AM
-if (BackupService && typeof BackupService.performBackup === 'function') {
-  scheduleTask('0 2 * * *', () => BackupService.performBackup(), 'Database backup');
-}
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+startServer();

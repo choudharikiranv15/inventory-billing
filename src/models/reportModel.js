@@ -16,20 +16,16 @@ export const ReportModel = {
       
       if (locationId) {
         params.push(locationId);
-        locationFilter = 'AND i.location_id = $3';
+        locationFilter = 'AND s.location_id = $3';
       }
 
       const { rows: [report] } = await client.query(
         `SELECT 
-          COUNT(i.id) as total_transactions,
-          SUM(i.total) as gross_sales,
-          SUM(i.tax_amount) as total_tax,
-          SUM(i.discount) as total_discount,
-          SUM(i.total) - SUM(i.discount) as net_sales,
-          COUNT(DISTINCT i.customer_id) as unique_customers
-         FROM invoices i
-         WHERE i.date BETWEEN $1 AND $2 ${locationFilter}
-         GROUP BY DATE_TRUNC('day', i.date)`,
+          COUNT(s.id) as total_transactions,
+          SUM(s.quantity_sold) as total_items_sold,
+          COUNT(DISTINCT s.customer_id) as unique_customers
+         FROM sales s
+         WHERE s.sale_date BETWEEN $1 AND $2 ${locationFilter}`,
         params
       );
 
@@ -37,14 +33,12 @@ export const ReportModel = {
         `SELECT 
           p.id,
           p.name,
-          SUM(ii.quantity) as units_sold,
-          SUM(ii.quantity * ii.unit_price) as revenue
-         FROM invoice_items ii
-         JOIN invoices i ON ii.invoice_id = i.id
-         JOIN products p ON ii.product_id = p.id
-         WHERE i.date BETWEEN $1 AND $2 ${locationFilter}
+          SUM(s.quantity_sold) as units_sold
+         FROM sales s
+         JOIN products p ON s.product_id = p.id
+         WHERE s.sale_date BETWEEN $1 AND $2 ${locationFilter}
          GROUP BY p.id, p.name
-         ORDER BY revenue DESC
+         ORDER BY units_sold DESC
          LIMIT 10`,
         params
       );
@@ -200,12 +194,12 @@ export const ReportModel = {
 
     const { rows } = await client.query(
       `SELECT 
-        DATE_TRUNC('day', date) as day,
-        SUM(total) as daily_sales,
+        DATE_TRUNC('day', sale_date) as day,
+        SUM(quantity_sold) as items_sold,
         COUNT(id) as transactions
-       FROM invoices
-       WHERE date BETWEEN $1 AND $2 ${locationFilter}
-       GROUP BY DATE_TRUNC('day', date)
+       FROM sales
+       WHERE sale_date BETWEEN $1 AND $2 ${locationFilter}
+       GROUP BY DATE_TRUNC('day', sale_date)
        ORDER BY day`,
       params
     );

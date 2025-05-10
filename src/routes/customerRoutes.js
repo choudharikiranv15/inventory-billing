@@ -2,8 +2,12 @@
 
 import express from 'express';
 import { query } from '../config/db.js';
+import { verifyToken } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// Apply authentication middleware to all routes
+router.use(verifyToken);
 
 // Get all customers
 router.get('/', async (req, res) => {

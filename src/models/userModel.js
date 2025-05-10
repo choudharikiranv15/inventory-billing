@@ -13,7 +13,7 @@ export const createUser = async (username, password) => {
 };
 
 export const findUserByUsername = async (username) => {
-  const query = 'SELECT id, username, password FROM users WHERE username = $1';
+  const query = 'SELECT id, username, password, email, role_id FROM users WHERE username = $1';
   const { rows } = await poolQuery(query, [username]);
   return rows[0] || null;
 };

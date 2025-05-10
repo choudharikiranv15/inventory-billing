@@ -1,5 +1,6 @@
 import { query, getClient } from '../config/db.js';
 import { generateBarcode, validateBarcode } from '../utils/barcodeGenerator.js';
+import { pool } from '../db/db.js';
 
 
 // Utility function to group array items by a key
@@ -105,16 +106,21 @@ async checkLocationExists(locationId) {
  * Check if supplier exists
  */
 async checkSupplierExists(supplierId) {
-  try {
-    const { rows } = await query(
-      'SELECT id FROM suppliers WHERE id = $1',
-      [supplierId]
+  if (!supplierId) return true; // Skip validation if no supplier ID
+  
+  const { rows } = await query(
+    'SELECT id FROM vendors WHERE id = $1',
+    [supplierId]
+  );
+  
+  if (rows.length === 0) {
+    throw new ProductError(
+      `Supplier with ID ${supplierId} does not exist`,
+      'INVALID_SUPPLIER'
     );
-    return rows.length > 0;
-  } catch (error) {
-    console.error('Failed to check supplier:', error);
-    throw error;
   }
+  
+  return true;
 },
 
 // In your create method, modify the barcode handling:
@@ -661,40 +667,35 @@ async findByBarcode(barcode) {
    */
   async getAll(filters = {}) {
     try {
-      let queryText = 'SELECT * FROM products';
-      const params = [];
-      const conditions = [];
+      let query = `
+        SELECT p.*, l.name as location_name, v.name as supplier_name 
+        FROM products p 
+        LEFT JOIN locations l ON p.location_id = l.id 
+        LEFT JOIN vendors v ON p.supplier_id = v.id 
+        WHERE 1=1
+      `;
       
-      // Add filter conditions
-      if (filters.category) {
-        conditions.push(`category = $${params.length + 1}`);
-        params.push(filters.category);
-      }
-      
+      const values = [];
+      let valueIndex = 1;
+
       if (filters.location_id) {
-        conditions.push(`location_id = $${params.length + 1}`);
-        params.push(filters.location_id);
+        query += ` AND p.location_id = $${valueIndex}`;
+        values.push(filters.location_id);
+        valueIndex++;
       }
-      
-      if (filters.supplier_id) {
-        conditions.push(`supplier_id = $${params.length + 1}`);
-        params.push(filters.supplier_id);
+
+      if (filters.category) {
+        query += ` AND p.category = $${valueIndex}`;
+        values.push(filters.category);
+        valueIndex++;
       }
-      
+
       if (filters.minStock) {
-        conditions.push(`quantity <= min_stock_level`);
+        query += ` AND p.quantity <= p.min_stock_level`;
       }
-      
-      // Add WHERE clause if there are conditions
-      if (conditions.length > 0) {
-        queryText += ' WHERE ' + conditions.join(' AND ');
-      }
-      
-      // Add ORDER BY
-      queryText += ' ORDER BY name';
-      
-      const { rows } = await query(queryText, params);
-      return rows;
+
+      const result = await query(query, values);
+      return result.rows;
     } catch (error) {
       console.error('Error in ProductModel.getAll:', error);
       throw error;
@@ -710,6 +711,250 @@ async findByBarcode(barcode) {
     } catch (error) {
       console.error('Error in ProductModel.getLowStockItems:', error);
       throw error;
+    }
+  },
+
+  create: async function(productData) {
+    const { name, price, description, category, quantity, min_stock_level, location_id, supplier_id } = productData;
+    
+    try {
+      const result = await pool.query(
+        `INSERT INTO products 
+        (name, price, description, category, quantity, min_stock_level, location_id, supplier_id) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+        RETURNING *`,
+        [name, price, description, category, quantity || 0, min_stock_level || 5, location_id, supplier_id]
+      );
+      
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error creating product:', error);
+      throw error;
+    }
+  },
+
+  findById: async function(id) {
+    try {
+      const result = await query(
+        `SELECT p.*, l.name as location_name, v.name as supplier_name 
+        FROM products p 
+        LEFT JOIN locations l ON p.location_id = l.id 
+        LEFT JOIN vendors v ON p.supplier_id = v.id 
+        WHERE p.id = $1`,
+        [id]
+      );
+      
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error finding product:', error);
+      throw error;
+    }
+  },
+
+  getAll: async function(filters = {}) {
+    try {
+      let query = `
+        SELECT p.*, l.name as location_name, v.name as supplier_name 
+        FROM products p 
+        LEFT JOIN locations l ON p.location_id = l.id 
+        LEFT JOIN vendors v ON p.supplier_id = v.id 
+        WHERE 1=1
+      `;
+      
+      const values = [];
+      let valueIndex = 1;
+
+      if (filters.location_id) {
+        query += ` AND p.location_id = $${valueIndex}`;
+        values.push(filters.location_id);
+        valueIndex++;
+      }
+
+      if (filters.category) {
+        query += ` AND p.category = $${valueIndex}`;
+        values.push(filters.category);
+        valueIndex++;
+      }
+
+      if (filters.minStock) {
+        query += ` AND p.quantity <= p.min_stock_level`;
+      }
+
+      const result = await pool.query(query, values);
+      return result.rows;
+    } catch (error) {
+      console.error('Error getting products:', error);
+      throw error;
+    }
+  },
+
+  update: async function(id, updateData) {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      
+      // Validate and prepare data
+      const preparedData = this.prepareProductData(updateData, true);
+      
+      if (Object.keys(preparedData).length === 0) {
+        throw new ProductError('No valid fields to update', 'NO_VALID_UPDATES');
+      }
+      
+      // Handle barcode validation if being updated
+      if (preparedData.barcode) {
+        preparedData.barcode = await this.validateBarcode(preparedData.barcode, id);
+      }
+      
+      // Build update query
+      const fields = Object.keys(preparedData);
+      const setClauses = fields.map((field, i) => `${field} = $${i+1}`);
+      const values = fields.map(field => preparedData[field]);
+      values.push(id);
+      
+      const { rows } = await client.query(
+        `UPDATE products SET ${setClauses.join(', ')}, updated_at = NOW()
+         WHERE id = $${fields.length + 1}
+         RETURNING *`,
+        values
+      );
+      
+      if (rows.length === 0) {
+        throw new ProductError('Product not found', 'NOT_FOUND');
+      }
+      
+      await client.query('COMMIT');
+      return rows[0];
+    } catch (error) {
+      await client.query('ROLLBACK');
+      
+      // Handle specific errors
+      if (error.code === '23505') {
+        throw new ProductError('Duplicate barcode', 'DUPLICATE_BARCODE');
+      }
+      
+      if (error instanceof ProductError) throw error;
+      
+      throw new ProductError(
+        'Failed to update product',
+        'DATABASE_ERROR',
+        { originalError: error.message }
+      );
+    } finally {
+      client.release();
+    }
+  },
+
+  updateStock: async function(id, quantityChange) {
+    try {
+      const result = await pool.query(
+        `UPDATE products 
+        SET quantity = quantity + $1 
+        WHERE id = $2 
+        RETURNING *`,
+        [quantityChange, id]
+      );
+      
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error updating stock:', error);
+      throw error;
+    }
+  },
+
+  delete: async function(id) {
+    try {
+      // First check if product exists
+      const product = await this.findById(id);
+      
+      if (!product) {
+        throw new Error('Product not found');
+      }
+
+      // Delete the product
+      const result = await pool.query(
+        'DELETE FROM products WHERE id = $1 RETURNING *',
+        [id]
+      );
+
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error deleting product:', error);
+      throw error;
+    }
+  },
+
+  getLowStockProducts: async function() {
+    try {
+      const result = await query(
+        `SELECT p.*, l.name as location_name, v.name as supplier_name 
+        FROM products p 
+        LEFT JOIN locations l ON p.location_id = l.id 
+        LEFT JOIN vendors v ON p.supplier_id = v.id 
+        WHERE p.quantity <= p.min_stock_level`
+      );
+      
+      return result.rows;
+    } catch (error) {
+      console.error('Error getting low stock products:', error);
+      throw error;
+    }
+  },
+
+  getTopSellingProducts: async function(limit = 5) {
+    try {
+      // Check if sales and products tables exist and have the necessary relationship
+      const tableCheck = await query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'sales'
+        ) AS sales_exists
+      `);
+      
+      // If sales table doesn't exist, return empty array
+      if (!tableCheck.rows[0]?.sales_exists) {
+        console.warn('Sales table does not exist, returning empty top products');
+        return [];
+      }
+      
+      // Attempt to get top products safely
+      try {
+        const result = await query(`
+          SELECT 
+            p.id,
+            p.name,
+            p.price,
+            COUNT(*) as total_sold
+          FROM products p
+          JOIN sales s ON p.id = s.product_id
+          WHERE s.sale_date >= NOW() - INTERVAL '30 days'
+          GROUP BY p.id, p.name, p.price
+          ORDER BY total_sold DESC
+          LIMIT $1
+        `, [limit]);
+        
+        return result.rows;
+      } catch (joinError) {
+        // Fallback if the join fails (e.g., schema mismatch)
+        console.warn('Join between products and sales failed, using fallback query', joinError);
+        
+        // Return some products with 0 sales as fallback
+        const fallbackResult = await query(`
+          SELECT 
+            id,
+            name,
+            price,
+            0 as total_sold
+          FROM products
+          ORDER BY id
+          LIMIT $1
+        `, [limit]);
+        
+        return fallbackResult.rows;
+      }
+    } catch (error) {
+      console.error('Error getting top selling products:', error);
+      return [];
     }
   }
 };

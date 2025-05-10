@@ -41,4 +41,15 @@ export class CustomerModel {
     const result = await query(sql, [id]);
     return result.rows[0];
   }
+
+  static async count() {
+    try {
+      const sql = 'SELECT COUNT(*) as total FROM customers';
+      const result = await query(sql);
+      return parseInt(result.rows[0].total);
+    } catch (error) {
+      console.error('Error counting customers:', error);
+      return 0;
+    }
+  }
 } 
