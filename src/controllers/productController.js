@@ -332,5 +332,50 @@ export const ProductController = {
         error: error.message
       });
     }
+  },
+
+  /**
+   * Find product by barcode
+   */
+  async findByBarcode(req, res) {
+    try {
+      // Validate barcode
+      const { barcode } = req.params;
+      
+      if (!barcode) {
+        return res.status(400).json({
+          success: false,
+          error: 'Barcode is required',
+          message: 'Please provide a valid barcode'
+        });
+      }
+
+      const product = await ProductModel.findByBarcode(barcode);
+      
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          error: 'Product not found',
+          message: 'No product found with the specified barcode'
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: product
+      });
+    } catch (error) {
+      console.error('Find product by barcode error:', error);
+      
+      return res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+        message: 'Failed to find product by barcode',
+        details: process.env.NODE_ENV === 'development' ? {
+          message: error.message,
+          stack: error.stack
+        } : undefined
+      });
+    }
   }
 };

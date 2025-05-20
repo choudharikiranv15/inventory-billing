@@ -64,7 +64,7 @@ export class UserController {
           r.permissions as role_permissions
         FROM users u
         JOIN roles r ON u.role_id = r.id
-        WHERE u.username = $1 AND u.is_active = true
+        WHERE u.username = $1
       `, [username]);
 
       if (!user) {
@@ -203,7 +203,6 @@ export class UserController {
         u.id,
         u.username,
         u.email,
-        u.is_active,
         u.created_at,
         u.updated_at,
         r.id as role_id,
@@ -232,7 +231,6 @@ export class UserController {
       id: user.id,
       username: user.username,
       email: user.email,
-      is_active: user.is_active,
       created_at: user.created_at,
       updated_at: user.updated_at,
       role: {

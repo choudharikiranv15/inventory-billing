@@ -1,9 +1,17 @@
 import express from 'express';
-import dotenv from 'dotenv';
 import cors from 'cors';
-import bodyParser from 'body-parser';
-import path from 'path';
+import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
+import { query } from './config/db.js';
+import { notificationService } from './services/notificationServices.js';
+import { initializeScheduledTasks } from './services/schedulerService.js';
+import { verifyToken } from './middleware/authMiddleware.js';
+import { errorHandler } from './middleware/errorHandler.js';
+
+// Import routes
 import authRoutes from './routes/authRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
 import barcodeRoutes from './routes/barcodeRoutes.js';
@@ -11,79 +19,19 @@ import productRoutes from './routes/productRoutes.js';
 import salesRoutes from './routes/salesRoutes.js';
 import invoiceRoutes from './routes/invoiceRoutes.js';
 import userRoutes from './routes/userRoutes.js';
-import { verifyToken } from './middleware/authMiddleware.js';
-import { ProductModel } from './models/productModel.js';
-import cron from 'node-cron';
-import { errorHandler } from './middleware/errorHandler.js';
 import customerRoutes from './routes/customerRoutes.js';
 import vendorRoutes from './routes/vendorRoutes.js';
-import NotificationService from './services/notificationServices.js';
-import BackupService from './services/backupService.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
-import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import { setupScheduledTasks } from './utils/scheduler.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 
-// Initialize required packages dynamically to avoid startup errors
-let apiLimiter;
-try {
-  apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later'
-  });
-} catch (error) {
-  console.warn('Rate limiting or helmet not available:', error.message);
-}
-
+// Load environment variables
 dotenv.config();
 
-// ES modules fix for __dirname
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = dirname(__filename);
 
 const app = express();
-
-// CORS configuration
-const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl requests)
-    if (!origin) return callback(null, true);
-    
-    // Allow Chrome extensions
-    if (origin.startsWith('chrome-extension://')) {
-      return callback(null, true);
-    }
-    
-    // Allow localhost development
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:3002',
-      'http://localhost:5000',
-      'http://localhost:5001',
-      'http://localhost:5002',
-      process.env.FRONTEND_URL // Add your production frontend URL here
-    ].filter(Boolean); // Remove undefined/null values
-    
-    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true, // Allow credentials (cookies, authorization headers, etc)
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-  exposedHeaders: ['Content-Range', 'X-Content-Range']
-};
-
-// Apply CORS with options
-app.use(cors(corsOptions));
-
-// Pre-flight requests
-app.options('*', cors(corsOptions));
 
 // Security middleware
 app.use(helmet({
@@ -91,15 +39,38 @@ app.use(helmet({
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
 }));
 
-// Apply rate limiting to API routes if available
-if (apiLimiter) {
-  app.use('/api/', apiLimiter);
-  console.log('API rate limiting enabled');
-}
+// Basic middleware
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? process.env.FRONTEND_URL 
+    : ['http://localhost:5173', 'http://localhost:3000'], // Allow both Vite and React dev servers
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Middleware
+// Add request logging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: process.env.NODE_ENV === 'production' ? 100 : 1000, // More lenient in development
+  message: {
+    error: 'Too many requests',
+    message: 'Please try again later'
+  }
+});
+app.use(limiter);
+
+// Serve static files from the React app
+const frontendPath = join(__dirname, '..', 'invoice-frontend', 'build');
+app.use(express.static(frontendPath));
 
 // API routes
 // Public routes
@@ -108,116 +79,157 @@ app.use('/api/auth', authRoutes);
 // Protected routes
 app.use('/api/reports', verifyToken, reportRoutes);
 app.use('/api/barcode', verifyToken, barcodeRoutes);
-app.use('/api/products', productRoutes);
+app.use('/api/products', verifyToken, productRoutes);
 app.use('/api/sales', verifyToken, salesRoutes);
 app.use('/api/invoices', verifyToken, invoiceRoutes);
 app.use('/api/customers', verifyToken, customerRoutes);
 app.use('/api/vendors', verifyToken, vendorRoutes);
 app.use('/api/payments', verifyToken, paymentRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/dashboard', verifyToken, dashboardRoutes);
+app.use('/api/users', verifyToken, userRoutes);
+app.use('/api/notifications', verifyToken, notificationRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date() });
 });
 
-// Serve React frontend
-// Define the path to the frontend build directory
-const frontendBuildPath = path.join(__dirname, '..', 'invoice-frontend', 'build');
+// The "catchall" handler: for any request that doesn't
+// match one above, send back React's index.html file.
+app.get('*', (req, res) => {
+  res.sendFile(join(frontendPath, 'index.html'));
+});
 
-// Check if frontend build directory exists
-let frontendExists = false;
-try {
-  const fs = await import('fs');
-  frontendExists = fs.existsSync(frontendBuildPath);
-} catch (error) {
-  console.warn('Failed to check frontend build directory:', error.message);
-}
-
-// Serve static files from the React frontend build directory if it exists
-if (frontendExists) {
-  app.use(express.static(frontendBuildPath));
-  
-  // For API routes, we've already defined them above
-  // For all other routes, serve the React app's index.html
-  app.get('*', (req, res, next) => {
-    // Only serve the index.html for non-API routes
-    if (!req.path.startsWith('/api/')) {
-      res.sendFile(path.join(frontendBuildPath, 'index.html'));
-    } else {
-      // Let API routes be handled by their respective handlers
-      next();
-    }
-  });
-  console.log(`Frontend will be served from: ${frontendBuildPath}`);
-} else {
-  console.log('Frontend build directory not found, only API routes will be available');
-}
-
-// Error handling
+// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    error: 'Server error',
+  console.error('Server error:', {
     message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    body: req.body,
+    query: req.query,
+    params: req.params
+  });
+
+  // Handle specific error types
+  if (err.name === 'ValidationError') {
+    return res.status(400).json({
+      error: 'Validation Error',
+      message: err.message
+    });
+  }
+
+  if (err.name === 'UnauthorizedError') {
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Invalid or missing authentication token'
+    });
+  }
+
+  // Default error response
+  res.status(err.status || 500).json({
+    error: err.name || 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
+
 app.use(errorHandler);
 
-// Setup scheduled tasks
-setupScheduledTasks();
+// Initialize database and start server
+const PORT = process.env.PORT || 5001;
+let server;
+let isShuttingDown = false;
+let isInitialized = false;
 
-// Start server with port fallback and error handling
-const PORT = process.env.PORT || 5000;
-
-const startServer = async () => {
-  let currentPort = PORT;
-  const maxRetries = 3;
-  let retryCount = 0;
-
-  const tryStartServer = () => {
-    return new Promise((resolve, reject) => {
-      const server = app.listen(currentPort, () => {
-        console.log(`Server running on port ${currentPort}`);
-        console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-        resolve(server);
-      });
-
-      server.on('error', (error) => {
-        if (error.code === 'EADDRINUSE') {
-          console.log(`Port ${currentPort} is in use, trying next port...`);
-          server.close();
-          currentPort++;
-          retryCount++;
-          if (retryCount < maxRetries) {
-            tryStartServer().then(resolve).catch(reject);
-          } else {
-            reject(new Error(`Could not find an available port after ${maxRetries} attempts`));
-          }
-        } else {
-          reject(error);
-        }
-      });
-    });
-  };
-
+async function initializeDatabase() {
+  if (isInitialized) return;
+  
   try {
-    const server = await tryStartServer();
+    // Test database connection
+    await query('SELECT NOW()');
+    console.log('PostgreSQL connected successfully');
+
+    // Initialize notifications table
+    await notificationService.initializeNotificationsTable();
+    console.log('Database initialization completed');
+    
+    isInitialized = true;
+  } catch (error) {
+    console.error('Database initialization failed:', error);
+    throw error;
+  }
+}
+
+async function startServer() {
+  try {
+    if (isShuttingDown) return;
+
+    // Initialize database only once
+    await initializeDatabase();
+
+    // Initialize scheduled tasks
+    await initializeScheduledTasks();
+
+    // Start server
+    server = app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    });
+
+    // Handle server errors
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use. Please try a different port.`);
+        process.exit(1);
+      } else {
+        console.error('Server error:', error);
+      }
+    });
 
     // Handle process termination
-    process.on('SIGTERM', () => {
-      console.info('SIGTERM signal received. Closing server...');
-      server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-      });
-    });
+    process.on('SIGTERM', gracefulShutdown);
+    process.on('SIGINT', gracefulShutdown);
 
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
   }
-};
+}
+
+async function gracefulShutdown() {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  
+  console.log('Received shutdown signal. Closing server...');
+  
+  if (server) {
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+
+    // Force close after 10 seconds
+    setTimeout(() => {
+      console.error('Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 10000);
+  } else {
+    process.exit(0);
+  }
+}
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown();
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  gracefulShutdown();
+});
 
 startServer();

@@ -4,7 +4,12 @@ import { verifyToken, authAndPermission } from '../middleware/authMiddleware.js'
 
 const router = express.Router();
 
-// Apply authentication middleware to all routes
+// Public routes
+router.get('/', ProductController.getAll);
+router.get('/:id', ProductController.getById);
+router.get('/barcode/:barcode', ProductController.findByBarcode);
+
+// Protected routes
 router.use(verifyToken);
 
 // Create a new product

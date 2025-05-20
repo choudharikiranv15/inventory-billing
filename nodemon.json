@@ -1,0 +1,24 @@
+{
+  "verbose": true,
+  "ignore": [
+    "node_modules/**/*",
+    "invoice-frontend/**/*",
+    "*.test.js",
+    "*.spec.js",
+    "coverage/**/*",
+    ".git/**/*",
+    "**/*.md",
+    "**/*.txt",
+    "**/*.log",
+    "**/*.json"
+  ],
+  "watch": ["src/**/*.js"],
+  "ext": "js",
+  "delay": "2500",
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "events": {
+    "restart": "echo 'Server restarted due to changes'"
+  }
+}

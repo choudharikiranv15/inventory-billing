@@ -704,13 +704,23 @@ async findByBarcode(barcode) {
   
   async getLowStockItems() {
     try {
-      const { rows } = await query(
-        'SELECT * FROM products WHERE quantity <= min_stock_level ORDER BY quantity ASC'
-      );
-      return rows;
+      const result = await query(`
+        SELECT 
+          id, 
+          name, 
+          price, 
+          quantity, 
+          min_stock_level,
+          category
+        FROM products
+        WHERE quantity <= min_stock_level
+        ORDER BY quantity ASC
+      `);
+      
+      return result.rows;
     } catch (error) {
-      console.error('Error in ProductModel.getLowStockItems:', error);
-      throw error;
+      console.error('Error getting low stock items:', error);
+      return [];
     }
   },
 
@@ -902,56 +912,24 @@ async findByBarcode(barcode) {
 
   getTopSellingProducts: async function(limit = 5) {
     try {
-      // Check if sales and products tables exist and have the necessary relationship
-      const tableCheck = await query(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_schema = 'public' 
-          AND table_name = 'sales'
-        ) AS sales_exists
-      `);
+      const result = await query(`
+        SELECT 
+          p.id,
+          p.name,
+          p.price,
+          p.quantity,
+          p.category,
+          COALESCE(SUM(si.quantity), 0) as total_sold
+        FROM products p
+        LEFT JOIN sale_items si ON p.id = si.product_id
+        LEFT JOIN sales s ON si.sale_id = s.id
+        WHERE s.status != 'voided' OR s.status IS NULL
+        GROUP BY p.id, p.name, p.price, p.quantity, p.category
+        ORDER BY total_sold DESC
+        LIMIT $1
+      `, [limit]);
       
-      // If sales table doesn't exist, return empty array
-      if (!tableCheck.rows[0]?.sales_exists) {
-        console.warn('Sales table does not exist, returning empty top products');
-        return [];
-      }
-      
-      // Attempt to get top products safely
-      try {
-        const result = await query(`
-          SELECT 
-            p.id,
-            p.name,
-            p.price,
-            COUNT(*) as total_sold
-          FROM products p
-          JOIN sales s ON p.id = s.product_id
-          WHERE s.sale_date >= NOW() - INTERVAL '30 days'
-          GROUP BY p.id, p.name, p.price
-          ORDER BY total_sold DESC
-          LIMIT $1
-        `, [limit]);
-        
-        return result.rows;
-      } catch (joinError) {
-        // Fallback if the join fails (e.g., schema mismatch)
-        console.warn('Join between products and sales failed, using fallback query', joinError);
-        
-        // Return some products with 0 sales as fallback
-        const fallbackResult = await query(`
-          SELECT 
-            id,
-            name,
-            price,
-            0 as total_sold
-          FROM products
-          ORDER BY id
-          LIMIT $1
-        `, [limit]);
-        
-        return fallbackResult.rows;
-      }
+      return result.rows;
     } catch (error) {
       console.error('Error getting top selling products:', error);
       return [];

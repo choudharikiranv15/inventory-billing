@@ -345,36 +345,92 @@ export class SalesModel {
         return [];
       }
       
-      // Try to get the sales by month
-      try {
-        const result = await query(`
-          SELECT 
-            TO_CHAR(sale_date, 'YYYY-MM') as month,
-            SUM(total_amount) as total
-          FROM sales
-          WHERE sale_date >= NOW() - INTERVAL '12 months'
-          GROUP BY TO_CHAR(sale_date, 'YYYY-MM')
-          ORDER BY month ASC
-        `);
+      // Get the sales by month with proper error handling
+      const result = await query(`
+        SELECT 
+          TO_CHAR(sale_date, 'YYYY-MM') as month,
+          COALESCE(SUM(total_amount), 0) as total
+        FROM sales
+        WHERE sale_date >= NOW() - INTERVAL '12 months'
+          AND status != 'voided'
+        GROUP BY TO_CHAR(sale_date, 'YYYY-MM')
+        ORDER BY month ASC
+      `);
+      
+      // If we have results, return them
+      if (result.rows && result.rows.length > 0) {
         return result.rows;
-      } catch (queryError) {
-        console.error('Error in specific sales query:', queryError);
-        
-        // Generate some fallback data for the last 12 months
-        const fallbackData = [];
-        const now = new Date();
-        for (let i = 11; i >= 0; i--) {
-          const month = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          fallbackData.push({
-            month: month.toISOString().substring(0, 7),
-            total: '0'
-          });
-        }
-        return fallbackData;
       }
+      
+      // Generate fallback data for the last 12 months if no results
+      const fallbackData = [];
+      const now = new Date();
+      for (let i = 11; i >= 0; i--) {
+        const month = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        fallbackData.push({
+          month: month.toISOString().substring(0, 7),
+          total: '0'
+        });
+      }
+      return fallbackData;
     } catch (error) {
       console.error('Error in SalesModel.getSalesByMonth:', error);
-      return [];
+      // Return fallback data on error
+      const fallbackData = [];
+      const now = new Date();
+      for (let i = 11; i >= 0; i--) {
+        const month = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        fallbackData.push({
+          month: month.toISOString().substring(0, 7),
+          total: '0'
+        });
+      }
+      return fallbackData;
+    }
+  }
+
+  static async count() {
+    try {
+      const result = await query('SELECT COUNT(*) as total FROM sales WHERE status != \'voided\'');
+      return parseInt(result.rows[0].total) || 0;
+    } catch (error) {
+      console.error('Error counting sales:', error);
+      return 0;
+    }
+  }
+
+  static async getLast7DaysSales() {
+    try {
+      const result = await query(`
+        SELECT 
+          DATE(sale_date) as date,
+          COALESCE(SUM(total_amount), 0) as total
+        FROM sales
+        WHERE sale_date >= CURRENT_DATE - INTERVAL '6 days'
+          AND sale_date <= CURRENT_DATE
+          AND status != 'voided'
+        GROUP BY DATE(sale_date)
+        ORDER BY date ASC
+      `);
+
+      // Fill in missing days with zero values
+      const last7Days = Array.from({ length: 7 }, (_, i) => {
+        const date = new Date();
+        date.setDate(date.getDate() - (6 - i));
+        return date.toISOString().split('T')[0];
+      });
+
+      const salesMap = new Map(
+        result.rows.map(row => [row.date.toISOString().split('T')[0], parseFloat(row.total)])
+      );
+
+      return last7Days.map(date => ({
+        date,
+        total: salesMap.get(date) || 0
+      }));
+    } catch (error) {
+      console.error('Error getting last 7 days sales:', error);
+      throw error;
     }
   }
 }

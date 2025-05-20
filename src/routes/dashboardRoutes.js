@@ -11,161 +11,218 @@
    // Apply authentication middleware
    router.use(verifyToken);
 
+   // Cache configuration
+   const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+   let dashboardCache = {
+     data: null,
+     timestamp: null,
+     pendingRequest: null
+   };
+
    // GET /api/dashboard
    router.get('/', async (req, res) => {
      try {
-       // Create a default response with empty data
-       const defaultResponse = {
-         totalProducts: 0,
-         totalSales: 0,
-         totalCustomers: 0,
-         totalRevenue: 0,
-         totalProfit: 0,
-         lowStockItems: [],
-         recentSales: [],
-         products: [],
-         salesData: [],
-         categoryData: {
-           labels: [],
-           data: []
-         },
-         salesByMonth: [],
-         topProducts: [],
-         stockAlerts: []
-       };
+       const now = Date.now();
        
-       try {
-         // Get products
-         const products = await ProductModel.getAll();
-         defaultResponse.totalProducts = products.length;
-         defaultResponse.products = products;
-         
-         // Get low stock items
-         const lowStockItems = await ProductModel.getLowStockItems();
-         defaultResponse.lowStockItems = lowStockItems.slice(0, 5);
-         defaultResponse.stockAlerts = lowStockItems.slice(0, 10);
-         
-         // Get recent sales and handle potential errors
-         try {
-           const recentSales = await SalesModel.getRecentSales(5);
-           defaultResponse.recentSales = recentSales;
-           defaultResponse.totalSales = recentSales.length;
-         } catch (salesError) {
-           console.error('Error fetching recent sales:', salesError);
-         }
-         
-         // Get sales data for the last 7 days
-         const last7Days = Array.from({ length: 7 }, (_, i) => {
-           const date = new Date();
-           date.setDate(date.getDate() - (6 - i));
-           return date.toISOString().split('T')[0];
+       // Check if there's a valid cache
+       if (dashboardCache.data && dashboardCache.timestamp && 
+           (now - dashboardCache.timestamp) < CACHE_DURATION) {
+         return res.json({
+           success: true,
+           ...dashboardCache.data,
+           fromCache: true
          });
-         
-         // Get sales for each day with error handling
-         try {
-           const dailySales = await Promise.all(
-             last7Days.map(date => SalesModel.getSalesByDate(date).catch(() => []))
-           );
-           
-           // Format sales data
-           defaultResponse.salesData = last7Days.map((date, index) => {
-             const salesForDay = dailySales[index] || [];
-             return {
-               date,
-               total: salesForDay.reduce((sum, sale) => sum + (parseFloat(sale.total_amount) || 0), 0)
-             };
-           });
-         } catch (timeSeriesError) {
-           console.error('Error fetching time series data:', timeSeriesError);
-         }
-
-         // Try to get category data from database
-         try {
-           const categoryResult = await query(`
-             SELECT 
-               p.category as category,
-               COUNT(p.id) as product_count,
-               SUM(p.price * p.quantity) as inventory_value
-             FROM products p
-             WHERE p.category IS NOT NULL
-             GROUP BY p.category
-             ORDER BY inventory_value DESC
-             LIMIT 6
-           `);
-
-           if (categoryResult && categoryResult.rows && categoryResult.rows.length > 0) {
-             defaultResponse.categoryData = {
-               labels: categoryResult.rows.map(row => row.category || 'Uncategorized'),
-               data: categoryResult.rows.map(row => parseFloat(row.inventory_value) || 0)
-             };
-           }
-         } catch (categoryError) {
-           console.error('Error fetching category data:', categoryError);
-         }
-
-         // Try to get revenue data
-         try {
-           const revenueResult = await query(`
-             SELECT SUM(total_amount) as total_revenue
-             FROM sales
-             WHERE sale_date >= NOW() - INTERVAL '30 days'
-           `);
-           
-           if (revenueResult && revenueResult.rows && revenueResult.rows[0]) {
-             defaultResponse.totalRevenue = revenueResult.rows[0]?.total_revenue || 0;
-           }
-         } catch (revenueError) {
-           console.error('Error fetching revenue data:', revenueError);
-         }
-
-         // Try to get profit data
-         try {
-           const profitResult = await query(`
-             SELECT SUM(total_amount) * 0.2 as total_profit
-             FROM sales
-             WHERE sale_date >= NOW() - INTERVAL '30 days'
-           `);
-           
-           if (profitResult && profitResult.rows && profitResult.rows[0]) {
-             defaultResponse.totalProfit = profitResult.rows[0]?.total_profit || 0;
-           }
-         } catch (profitError) {
-           console.error('Error fetching profit data:', profitError);
-         }
-
-         // Get total customers with error handling
-         try {
-           defaultResponse.totalCustomers = await CustomerModel.count();
-         } catch (customerError) {
-           console.error('Error fetching customer count:', customerError);
-         }
-         
-         // Get sales by month with error handling
-         try {
-           defaultResponse.salesByMonth = await SalesModel.getSalesByMonth();
-         } catch (monthError) {
-           console.error('Error fetching sales by month:', monthError);
-         }
-         
-         // Get top selling products with error handling
-         try {
-           defaultResponse.topProducts = await ProductModel.getTopSellingProducts(5);
-         } catch (topProductsError) {
-           console.error('Error fetching top products:', topProductsError);
-         }
-         
-         // Return dashboard data
-         res.json(defaultResponse);
-       } catch (innerError) {
-         console.error('Error processing dashboard data:', innerError);
-         res.json(defaultResponse);
        }
+
+       // If there's a pending request, wait for it
+       if (dashboardCache.pendingRequest) {
+         const result = await dashboardCache.pendingRequest;
+         return res.json({
+           success: true,
+           ...result,
+           fromCache: true
+         });
+       }
+
+       // Create a new request promise
+       dashboardCache.pendingRequest = (async () => {
+         try {
+           // Create a default response with empty data
+           const defaultResponse = {
+             totalProducts: 0,
+             totalSales: 0,
+             totalCustomers: 0,
+             totalRevenue: 0,
+             totalProfit: 0,
+             lowStockItems: [],
+             recentSales: [],
+             products: [],
+             salesData: [],
+             categoryData: {
+               labels: [],
+               data: []
+             },
+             salesByMonth: [],
+             topProducts: [],
+             stockAlerts: [],
+             lastUpdated: '',
+             errors: []
+           };
+           
+           // Track individual section errors to return partial data
+           const errors = [];
+           
+           // Execute all queries in parallel
+           const [
+             productData,
+             salesData,
+             categoryData,
+             financialData,
+             customerCount,
+             monthlySales,
+             topProducts
+           ] = await Promise.all([
+             // Product data
+             Promise.all([
+               ProductModel.getAll(),
+               ProductModel.getLowStockItems()
+             ]).catch(error => {
+               console.error('Error fetching product data:', error);
+               errors.push('Failed to load product data: ' + error.message);
+               return [null, null];
+             }),
+
+             // Sales data
+             Promise.all([
+               SalesModel.getRecentSales(5),
+               SalesModel.count(),
+               SalesModel.getLast7DaysSales()
+             ]).catch(error => {
+               console.error('Error fetching sales data:', error);
+               errors.push('Failed to load sales data: ' + error.message);
+               return [null, null, null];
+             }),
+
+             // Category data
+             query(`
+               SELECT 
+                 p.category as category,
+                 COUNT(p.id) as product_count,
+                 COALESCE(SUM(p.price * p.quantity), 0) as inventory_value
+               FROM products p
+               WHERE p.category IS NOT NULL
+               GROUP BY p.category
+               ORDER BY inventory_value DESC
+               LIMIT 6
+             `).catch(error => {
+               console.error('Error fetching category data:', error);
+               errors.push('Failed to load category data: ' + error.message);
+               return { rows: [] };
+             }),
+
+             // Financial data
+             query(`
+               SELECT 
+                 COALESCE(SUM(total_amount), 0) as total_revenue,
+                 COALESCE(SUM(total_amount) * 0.2, 0) as total_profit
+               FROM sales
+               WHERE sale_date >= NOW() - INTERVAL '30 days'
+                 AND status != 'voided'
+             `).catch(error => {
+               console.error('Error fetching financial data:', error);
+               errors.push('Failed to load financial data: ' + error.message);
+               return { rows: [{ total_revenue: 0, total_profit: 0 }] };
+             }),
+
+             // Customer count
+             CustomerModel.count().catch(error => {
+               console.error('Error fetching customer count:', error);
+               errors.push('Failed to load customer count: ' + error.message);
+               return 0;
+             }),
+
+             // Monthly sales
+             SalesModel.getSalesByMonth().catch(error => {
+               console.error('Error fetching monthly sales:', error);
+               errors.push('Failed to load monthly sales data: ' + error.message);
+               return [];
+             }),
+
+             // Top products
+             ProductModel.getTopSellingProducts(5).catch(error => {
+               console.error('Error fetching top products:', error);
+               errors.push('Failed to load top products: ' + error.message);
+               return [];
+             })
+           ]);
+
+           // Process product data
+           if (productData[0]) {
+             defaultResponse.totalProducts = productData[0].length;
+             defaultResponse.products = productData[0];
+           }
+           if (productData[1]) {
+             defaultResponse.lowStockItems = productData[1].slice(0, 5);
+             defaultResponse.stockAlerts = productData[1].slice(0, 10);
+           }
+
+           // Process sales data
+           if (salesData[0]) defaultResponse.recentSales = salesData[0];
+           if (salesData[1]) defaultResponse.totalSales = salesData[1];
+           if (salesData[2]) defaultResponse.salesData = salesData[2];
+
+           // Process category data
+           if (categoryData.rows.length > 0) {
+             defaultResponse.categoryData = {
+               labels: categoryData.rows.map(row => row.category || 'Uncategorized'),
+               data: categoryData.rows.map(row => parseFloat(row.inventory_value) || 0)
+             };
+           }
+
+           // Process financial data
+           if (financialData.rows[0]) {
+             defaultResponse.totalRevenue = parseFloat(financialData.rows[0].total_revenue || 0);
+             defaultResponse.totalProfit = parseFloat(financialData.rows[0].total_profit || 0);
+           }
+
+           // Process remaining data
+           defaultResponse.totalCustomers = customerCount;
+           defaultResponse.salesByMonth = monthlySales;
+           defaultResponse.topProducts = topProducts;
+
+           // Add timestamp and errors
+           defaultResponse.lastUpdated = new Date().toISOString();
+           if (errors.length > 0) {
+             defaultResponse.errors = errors;
+           }
+
+           // Update cache
+           dashboardCache = {
+             data: defaultResponse,
+             timestamp: now,
+             pendingRequest: null
+           };
+
+           return defaultResponse;
+         } catch (error) {
+           dashboardCache.pendingRequest = null;
+           throw error;
+         }
+       })();
+
+       // Wait for the request to complete and send response
+       const result = await dashboardCache.pendingRequest;
+       res.json({
+         success: true,
+         ...result
+       });
      } catch (error) {
        console.error('Error fetching dashboard data:', error);
        res.status(500).json({ 
          success: false,
          error: 'Failed to fetch dashboard data',
-         details: error.message
+         details: error.message,
+         timestamp: new Date().toISOString()
        });
      }
    });
