@@ -37,10 +37,10 @@ A full-stack web application to help small businesses automate inventory managem
 |-------------|---------------------|
 | Frontend    | React.js, Axios      |
 | Backend     | Node.js, Express.js  |
-| Database    | MongoDB, Mongoose    |
+| Database    | PostgreSQL           |
 | Auth        | JWT (JSON Web Tokens)|
-| Styling     | Inline CSS (customizable) |
-| PDF         | Custom invoice generator using `pdfkit` or buffer-based utility |
+| Styling     | CSS (customizable)   |
+| PDF         | Custom invoice generator using `pdfkit`|
 
 ---
 
@@ -62,7 +62,7 @@ inventory-billing/
 │   └── App.js               # Main UI logic
 │
 ├── server/
-│   ├── models/              # MongoDB models
+│   ├── models/              # DB models
 │   ├── routes/              # Express routes
 │   ├── utils/               # Invoice generator
 │   ├── middleware/          # JWT auth middleware
